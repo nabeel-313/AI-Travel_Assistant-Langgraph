@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: postgres_travel
+    environment:
+      - POSTGRES_USER=nabeel
+      - POSTGRES_PASSWORD=momin.123
+      - POSTGRES_DB=travel_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_travel:/var/lib/postgresql/data
+    networks:
+      - travel_net
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nabeel -d travel_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis with persistence
+  redis:
+    image: redis:7-alpine
+    container_name: my-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - travel_net
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # FastAPI Application
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://nabeel:momin.123@postgres:5432/travel_db
+      - REDIS_URL=redis://redis:6379
+      - WORKER_PROCESSES=4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - travel_net
+    deploy:
+      replicas: 2
+    command: >
+      uvicorn src.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 4
+      --loop asyncio
+
+  # Celery Workers for LLM Processing
+  celery-worker:
+    build: .
+    depends_on:
+      - redis
+    networks:
+      - travel_net
+    environment:
+      - REDIS_URL=redis://redis:6379
+    deploy:
+      replicas: 3
+    command: >
+      celery -A tasks.llm_queue worker
+      --loglevel=info
+      --concurrency=4
+      --queues=llm,tools
+
+  # Celery Beat for Periodic Tasks
+  celery-beat:
+    build: .
+    depends_on:
+      - redis
+    networks:
+      - travel_net
+    environment:
+      - REDIS_URL=redis://redis:6379
+    command: >
+      celery -A tasks.llm_queue beat
+      --loglevel=info
+
+volumes:
+  pgdata_travel:
+  redis_data:
+
+networks:
+  travel_net:
+    driver: bridge

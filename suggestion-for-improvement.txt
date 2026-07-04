@@ -1,0 +1,152 @@
+from src.langgraph_core.LLMs.load_llms import LoadLLMs
+from src.langgraph_core.graphs.travel_planner_graph import TravelGraphBuilder
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from src.cache.redis_client import redis_client
+from src.exceptions import ExceptionError
+from src.loggers import Logger
+import asyncio
+
+logger = Logger(__name__).get_logger()
+
+# Initialize LLM + Graph
+models = LoadLLMs()
+llm = models.load_groq_model()
+graph_builder = TravelGraphBuilder(llm)
+graph = graph_builder.build()
+
+async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: str = None):
+    """Handle user message with LangGraph memory"""
+    try:
+        logger.info(f"User message from user {user_id}: {user_message}")
+
+        # Use thread_id for checkpointing (combine user_id + session_id)
+        # For separate contexts per tab:
+        thread_id = f"user_{user_id}_session_{session_id}"
+        # For shared context across tabs, use: thread_id = f"user_{user_id}"
+
+        # Config for checkpointer
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+
+        # Check if we have existing state
+        existing_state = None
+        try:
+            # Try to get existing checkpoint
+            existing_state = await graph.checkpointer.aget(config)
+        except Exception as e:
+            logger.info(f"No existing checkpoint found for thread {thread_id}: {e}")
+
+        # Initial state
+        if existing_state and "state" in existing_state:
+            # Use existing state and add new message
+            state = existing_state["state"]
+            state["messages"].append(HumanMessage(content=user_message))
+        else:
+            # Create new state
+            state = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "messages": [HumanMessage(content=user_message)],
+                "route": "router_node"
+            }
+
+        # Stream with checkpointing
+        async def run_langgraph_with_memory():
+            new_ai_messages = []
+
+            async for event in graph.astream(state, config=config):
+                for value in event.values():
+                    # Extract new AI messages
+                    if "messages" in value:
+                        for msg in value["messages"]:
+                            if isinstance(msg, AIMessage) and msg.content:
+                                logger.info(f"Assistant: {msg.content}")
+                                new_ai_messages.append(msg.content)
+                            elif isinstance(msg, ToolMessage) and msg.content:
+                                logger.info(f"[Tool Result] {msg.content}")
+                                new_ai_messages.append(msg.content)
+
+            return new_ai_messages
+
+        new_ai_messages = await run_langgraph_with_memory()
+
+        # Return response
+        return "\n".join(new_ai_messages) if new_ai_messages else "No response."
+
+    except Exception as e:
+        logger.error(f"Error in langgraph_chatbot: {e}")
+        raise ExceptionError(e)
+
+# Optional: Session management utilities
+async def clear_user_session(user_id: str, session_id: str):
+    """Clear user session from checkpoints"""
+    try:
+        thread_id = f"user_{user_id}_session_{session_id}"
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+        await graph.checkpointer.adelete(config)
+        logger.info(f"Cleared session for user {user_id}, session {session_id}")
+    except Exception as e:
+        logger.error(f"Error clearing session: {e}")
+
+async def clear_all_user_sessions(user_id: str):
+    """Clear all sessions for a user (not implemented - would require Redis SCAN)"""
+    logger.warning("clear_all_user_sessions requires Redis SCAN implementation")
+    pass
+
+
+# In main.py
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check"""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": {
+            "database": await check_db_health(),
+            "redis": await redis_client.is_connected(),
+            "llm": await check_llm_health()
+        }
+    }
+    return health_status
+
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+@app.post("/data")
+@limiter.limit("10/minute")
+async def get_data(request: Request):
+    # ... existing code
+
+
+# Enhance session manager for securoty
+class SecureSessionManager(SessionManager):
+    def __init__(self):
+        super().__init__()
+        self.session_expiry = 15 * 60  # 15 minutes
+        self.max_sessions_per_user = 5
+
+    async def create_session(self, user_id: int, user_data: dict = None) -> str:
+        # Enforce session limits
+        user_sessions = await self.get_user_sessions(user_id)
+        if len(user_sessions) >= self.max_sessions_per_user:
+            await self.cleanup_oldest_session(user_id)
+        # ... continue creation
+
+
+Add monitoring and metrics (Prometheus/Grafana)
+
+docker-compose -f docker-compose.dev.yml up -d
+uvicorn src.main:app --reload
+celery -A tasks.llm_queue worker --loglevel=info --concurrency=4 --queues=llm --pool=solo
+celery -A tasks.llm_queue worker --loglevel=info --concurrency=2 --queues=tools --pool=solo

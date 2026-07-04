@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Travel AI Assistant</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/1.6.5/flowbite.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/1.6.5/flowbite.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Enhanced authentication check script -->
+    <script>
+        // Enhanced authentication check
+        const sessionToken = localStorage.getItem('session_token');
+        const userData = localStorage.getItem('user_data');
+
+        console.log('🔍 Page load - Authentication check');
+        console.log('Session token:', sessionToken ? sessionToken.substring(0, 20) + '...' : 'Missing');
+        console.log('User data:', userData ? 'Exists' : 'Missing');
+
+        if (!sessionToken || !userData) {
+            console.log('❌ No session found, redirecting to login');
+            window.location.href = '/login';
+        } else {
+            console.log('✅ Session found, proceeding to chat');
+
+            // Store session token for use in fetch requests
+            window.sessionToken = sessionToken;
+            window.USER_SESSION_TOKEN = sessionToken;
+
+            try {
+                // Update UI with user info immediately
+                const user = JSON.parse(userData);
+                document.addEventListener('DOMContentLoaded', function() {
+                    const userNameElement = document.getElementById('userName');
+                    const userInfoElement = document.getElementById('userInfo');
+
+                    if (userNameElement && userInfoElement) {
+                        userNameElement.textContent = user.name || user.email;
+                        userInfoElement.classList.remove('hidden');
+                    }
+                });
+            } catch (error) {
+                console.error('Error parsing user data:', error);
+                window.location.href = '/login';
+            }
+        }
+    </script>
+
+    <!-- Navigation Bar -->
+    <nav class="nav-bar fixed top-0 w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center gap-3">
+                    <img src="https://cdn-icons-png.flaticon.com/512/2972/2972421.png" alt="Travel AI" class="h-8 w-8">
+                    <span class="text-xl font-bold text-gray-800">Travel AI Assistant</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <!-- User Info -->
+                    <div id="userInfo" class="hidden flex items-center gap-3">
+                        <span class="text-gray-700">Welcome, <span id="userName"></span>!</span>
+                        <button onclick="logout()" class="text-gray-600 hover:text-gray-800 transition-colors flex items-center gap-2">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </button>
+                    </div>
+
+                    <!-- Chat Controls -->
+                    <button class="text-gray-600 hover:text-gray-800 transition-colors" onclick="clearChat()">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Chat Container -->
+    <div class="chat-container">
+        <!-- Chat Header -->
+        <div class="chat-header">
+            <img src="https://cdn-icons-png.flaticon.com/512/2972/2972421.png" alt="Travel Assistant">
+            <div>
+                <h2 class="text-lg font-semibold">Travel Planning Assistant</h2>
+                <p class="text-sm opacity-90">AI-powered travel recommendations</p>
+            </div>
+            <div class="ml-auto flex items-center gap-2">
+                <div class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                <span class="text-sm">Online</span>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <div class="action-btn" onclick="insertSuggestion('Plan a weekend trip to mountains')">
+                <i class="fas fa-mountain"></i>
+                <span>Mountain Trip</span>
+            </div>
+            <div class="action-btn" onclick="insertSuggestion('Beach vacation with family')">
+                <i class="fas fa-umbrella-beach"></i>
+                <span>Beach Vacation</span>
+            </div>
+            <div class="action-btn" onclick="insertSuggestion('City tour with cultural sites')">
+                <i class="fas fa-city"></i>
+                <span>City Tour</span>
+            </div>
+        </div>
+
+        <!-- Suggestion Chips -->
+        <div class="suggestion-chips">
+            <div class="suggestion-chip" onclick="insertSuggestion('Plan a 3-day trip to Bali with budget $1000')">
+                <i class="fas fa-umbrella-beach"></i>
+                Bali Trip
+            </div>
+            <div class="suggestion-chip" onclick="insertSuggestion('Best romantic hotels in Paris under $200 per night')">
+                <i class="fas fa-heart"></i>
+                Paris Hotels
+            </div>
+            <div class="suggestion-chip" onclick="insertSuggestion('Adventure activities in New Zealand for thrill seekers')">
+                <i class="fas fa-hiking"></i>
+                Adventure
+            </div>
+            <div class="suggestion-chip" onclick="insertSuggestion('Cultural heritage sites and temples in Japan')">
+                <i class="fas fa-torii-gate"></i>
+                Japan Culture
+            </div>
+        </div>
+
+        <!-- Chat Messages -->
+        <div class="chat-messages" id="chatMessages">
+            <!-- Welcome Message -->
+            <div class="message bot-message">
+                <div class="message-content">
+                    <strong>👋 Welcome to your AI Travel Assistant!</strong><br><br>I can help you with:<br>• 🗺️ Trip planning & itineraries<br>• 🏨 Hotel recommendations<br>• 🍽️ Restaurant suggestions<br>• 🚗 Transportation options<br>• 🎭 Cultural activities<br><br>How can I assist with your travel plans today?
+                </div>
+                <div class="message-time">Just now</div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-container">
+            <form id="chatForm" class="input-wrapper">
+                <textarea
+                    id="messageInput"
+                    class="message-input"
+                    placeholder="Ask about travel destinations, hotels, activities..."
+                    rows="1"
+                ></textarea>
+                <button type="submit" id="sendButton" class="send-button">
+                    <i class="fas fa-paper-plane"></i>
+                    <span>Send</span>
+                </button>
+            </form>
+            <div class="text-center text-xs text-gray-500 mt-3">
+                <i class="fas fa-info-circle mr-1"></i>
+                Your chat will not be saved and will be lost upon reloading
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/script.js"></script>
+</body>
+</html>

@@ -1,0 +1,226 @@
+:root {
+    --primary-color: #3b82f6;
+    --user-message-bg: #3b82f6;
+    --bot-message-bg: #f3f4f6;
+    --gradient-start: #1e3a8a;
+    --gradient-mid: #1e40af;
+    --gradient-end: #1e1b4b;
+}
+
+body {
+    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-mid), var(--gradient-end));
+    min-height: 100vh;
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    padding: 0;
+}
+
+.chat-container {
+    max-width: 800px;
+    height: 85vh;
+    margin: 80px auto 20px;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-header {
+    background: linear-gradient(135deg, var(--primary-color), #1e40af);
+    color: white;
+    padding: 20px;
+    border-radius: 20px 20px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.chat-header img {
+    width: 40px;
+    height: 40px;
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.message {
+    max-width: 70%;
+    padding: 15px;
+    border-radius: 18px;
+    line-height: 1.5;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.user-message {
+    align-self: flex-end;
+    background: var(--user-message-bg);
+    color: white;
+    border-bottom-right-radius: 5px;
+}
+
+.bot-message {
+    align-self: flex-start;
+    background: var(--bot-message-bg);
+    color: #1f2937;
+    border-bottom-left-radius: 5px;
+    border: 1px solid #e5e7eb;
+}
+
+.message-content {
+    white-space: pre-wrap;
+}
+
+.message-content strong {
+    color: #dc2626;
+    font-weight: 600;
+}
+
+.typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 15px;
+    background: var(--bot-message-bg);
+    border-radius: 18px;
+    align-self: flex-start;
+    max-width: 70px;
+}
+
+.typing-dot {
+    width: 8px;
+    height: 8px;
+    background: #9ca3af;
+    border-radius: 50%;
+    animation: typingAnimation 1.4s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+.input-container {
+    padding: 20px;
+    border-top: 1px solid #e5e7eb;
+    background: white;
+    border-radius: 0 0 20px 20px;
+}
+
+.input-wrapper {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+.message-input {
+    flex: 1;
+    border: 2px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 12px 16px;
+    resize: none;
+    font-size: 14px;
+    transition: all 0.3s ease;
+    max-height: 120px;
+}
+
+.message-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.send-button {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 20px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.send-button:hover:not(:disabled) {
+    background: #1d4ed8;
+    transform: translateY(-1px);
+}
+
+.send-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.suggestion-chips {
+    display: flex;
+    gap: 10px;
+    padding: 15px 20px 0;
+    flex-wrap: wrap;
+}
+
+.suggestion-chip {
+    background: white;
+    border: 1px solid #d1d5db;
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.suggestion-chip:hover {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes typingAnimation {
+    0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+.nav-bar {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+}
+
+.message-time {
+    font-size: 11px;
+    opacity: 0.7;
+    margin-top: 5px;
+}
+
+/* User info styles */
+#userInfo {
+    background: rgba(59, 130, 246, 0.1);
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+#userInfo button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background-color 0.3s;
+}
+
+#userInfo button:hover {
+    background: rgba(59, 130, 246, 0.1);
+}

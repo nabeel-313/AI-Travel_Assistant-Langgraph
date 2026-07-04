@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langgraph-projects"
+version = "0.1.0"
+description = "Multi-project LangGraph repo with reusable core components."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Nabeel Ahmed", email = "mominnabeelahmed123@gmail.com" }
+]
+keywords = ["langgraph", "agents", "rag", "chatbot", "ai"]
+
+dependencies = [
+    "langchain_community",
+    "tiktoken",
+    "langchainhub",
+    "langchain",
+    "langgraph",
+    "tavily-python",
+    "python-dotenv",
+    "google-generativeai",
+    "langchain-google-genai",
+    "langchain-groq",
+    "langchain-nomic",
+    "langchain-text-splitters",
+    "langchain_mistralai",
+    "wikipedia",
+    "google-search-results",
+    "langgraph-prebuilt",
+    "ipykernel",
+    "arxiv",
+    "groq",
+    "langgraph-cli[inmem]",
+    "starlette>=0.40.0,<0.46.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "flake8>=6.0",
+    "isort>=5.0",
+    "mypy>=1.0",
+    "tox>=4.0",
+    "pip-tools"
+]
+
+[tool.black]
+line-length = 999
+target-version = ["py311", "py312"]
+
+[tool.isort]
+profile = "black"
+
+[tool.flake8]
+max-line-length = 999
+ignore = "E501, W505, E203, W503"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "--strict-markers --tb=short"
+testpaths = ["tests"]
