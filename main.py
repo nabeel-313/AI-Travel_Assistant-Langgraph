@@ -1,19 +1,101 @@
 from ai_travel_planner import langgraph_chatbot
-from fastapi import FastAPI, Request, HTTPException, status
+from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from src.cache.redis_client import init_redis
+from src.cache.redis_client import init_redis, redis_client
 import uvicorn
 from contextlib import asynccontextmanager
 from src.database.databases import database
 from src.auth.authentication import AuthenticationService
 from src.cache.session_manager import session_manager
 from src.loggers import Logger
+import time
+from collections import defaultdict
+from threading import Lock
+import os
 
 logger = Logger(__name__).get_logger()
+
+
+# Rate limiting configuration
+class RateLimiter:
+    """Simple in-memory rate limiter with sliding window."""
+
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.window_size = 60  # seconds
+        self.requests = defaultdict(list)
+        self.lock = Lock()
+
+    def is_allowed(self, client_id: str) -> bool:
+        """Check if request is allowed for client_id."""
+        current_time = time.time()
+        cutoff_time = current_time - self.window_size
+
+        with self.lock:
+            # Clean old requests
+            self.requests[client_id] = [
+                req_time for req_time in self.requests[client_id]
+                if req_time > cutoff_time
+            ]
+
+            # Check if limit exceeded
+            if len(self.requests[client_id]) >= self.requests_per_minute:
+                return False
+
+            # Add current request
+            self.requests[client_id].append(current_time)
+            return True
+
+    def get_retry_after(self, client_id: str) -> int:
+        """Get seconds until client can retry."""
+        current_time = time.time()
+        cutoff_time = current_time - self.window_size
+
+        with self.lock:
+            if client_id not in self.requests:
+                return 0
+
+            oldest_requests = [
+                req_time for req_time in self.requests[client_id]
+                if req_time > cutoff_time
+            ]
+
+            if len(oldest_requests) < self.requests_per_minute:
+                return 0
+
+            oldest = min(oldest_requests)
+            return int(self.window_size - (current_time - oldest)) + 1
+
+
+# Global rate limiter instance
+rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("RATE_LIMIT_RPM", "60")))
+
+
+def get_client_id(request: Request) -> str:
+    """Extract client identifier for rate limiting."""
+    # Use X-Forwarded-For header if behind proxy, otherwise use client host
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def check_rate_limit(request: Request):
+    """Dependency to check rate limit. Raises 429 if exceeded."""
+    client_id = get_client_id(request)
+
+    if not rate_limiter.is_allowed(client_id):
+        retry_after = rate_limiter.get_retry_after(client_id)
+        logger.warning(f"Rate limit exceeded for client: {client_id}")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please try again later.",
+            headers={"Retry-After": str(retry_after)}
+        )
 
 
 @asynccontextmanager
@@ -21,12 +103,45 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_redis()
     logger.info("Redis connected successfully")
+
+    # Verify Redis is healthy
+    try:
+        await redis_client.ping()
+        logger.info("Redis health check passed")
+    except Exception as e:
+        logger.error(f"Redis health check failed: {e}")
+
     yield
     # Shutdown
     logger.info("Application shutdown")
 
 # Then create your app with the lifespan
-app = FastAPI(title="Travel AI Assistant", debug=True, lifespan=lifespan)
+app = FastAPI(
+    title="Travel AI Assistant",
+    debug=os.getenv("DEBUG", "false").lower() == "true",
+    lifespan=lifespan
+)
+
+# Add CORS middleware
+app.add_middleware(
+    "CORSMiddleware",
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5000,http://localhost:3000").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    return response
 
 
 # Mount static files
@@ -65,6 +180,79 @@ class ChangePasswordRequest(BaseModel):
     session_token: str
     current_password: str
     new_password: str
+
+
+# Health check response models
+class HealthStatus(BaseModel):
+    status: str
+    timestamp: float
+    service: str
+
+
+class ReadinessStatus(BaseModel):
+    status: str
+    timestamp: float
+    checks: dict
+
+
+# Health check endpoints
+@app.get("/health", response_model=HealthStatus, tags=["Health"])
+async def health_check():
+    """
+    Basic health check endpoint.
+    Returns 200 if the service is running.
+    """
+    return HealthStatus(
+        status="healthy",
+        timestamp=time.time(),
+        service="travel-ai-assistant"
+    )
+
+
+@app.get("/health/live", response_model=HealthStatus, tags=["Health"])
+async def liveness_probe():
+    """
+    Kubernetes liveness probe.
+    Returns 200 if the service is alive.
+    """
+    return HealthStatus(
+        status="alive",
+        timestamp=time.time(),
+        service="travel-ai-assistant"
+    )
+
+
+@app.get("/health/ready", response_model=ReadinessStatus, tags=["Health"])
+async def readiness_probe():
+    """
+    Kubernetes readiness probe.
+    Returns 200 if all dependencies are available.
+    """
+    checks = {}
+    overall_status = "ready"
+
+    # Check Redis
+    try:
+        await redis_client.ping()
+        checks["redis"] = {"status": "healthy", "message": "Connected"}
+    except Exception as e:
+        checks["redis"] = {"status": "unhealthy", "message": str(e)}
+        overall_status = "not_ready"
+
+    # Check Database
+    try:
+        with database.get_session() as db:
+            db.execute("SELECT 1")
+        checks["database"] = {"status": "healthy", "message": "Connected"}
+    except Exception as e:
+        checks["database"] = {"status": "unhealthy", "message": str(e)}
+        overall_status = "not_ready"
+
+    return ReadinessStatus(
+        status=overall_status,
+        timestamp=time.time(),
+        checks=checks
+    )
 
 
 try:
@@ -272,10 +460,11 @@ async def get_current_user(session_token: str):
         return UserResponse(**user)
 
 
-@app.post('/data')
+@app.post('/data', dependencies=[Depends(check_rate_limit)])
 async def get_data(request: Request):
     """
     Handles POST requests to process user data - REQUIRES AUTHENTICATION
+    Rate limited to prevent abuse.
     """
     # Check if user is authenticated
     user = await get_current_user_from_request(request)

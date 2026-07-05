@@ -1,7 +1,13 @@
+"""
+Travel Planner Nodes with timeout handling and error recovery.
+"""
 import json
-from datetime import datetime
-from uuid import uuid4
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from functools import wraps
+from typing import Optional, Callable, Any
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -10,6 +16,9 @@ from src.langgraph_core.tools.custom_tools import (
     search_flights,
     search_hotels,
     weather_tool,
+    with_retry,
+    RetryConfig,
+    CircuitBreakerOpenError,
 )
 from src.langgraph_core.tools.tools import get_tools
 from src.loggers import Logger
@@ -18,12 +27,160 @@ from src.cache.redis_client import redis_client
 
 logger = Logger(__name__).get_logger()
 
+# Timeout configuration for LLM calls (in seconds)
+DEFAULT_LLM_TIMEOUT = 30.0
+LONG_LLM_TIMEOUT = 60.0  # For complex operations like itinerary generation
+
+# Thread pool for running sync operations
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
+def timeout_handler(seconds: float, default: Any = None):
+    """
+    Decorator to add timeout handling to async functions.
+
+    Args:
+        seconds: Timeout in seconds
+        default: Default value to return on timeout
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await asyncio.wait_for(func(*args, **kwargs), timeout=seconds)
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout ({seconds}s) in {func.__name__}")
+                return default
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {e}")
+                return default
+        return wrapper
+    return decorator
+
+
+async def run_with_timeout(coro, timeout: float, default: Any = None) -> Any:
+    """
+    Run a coroutine with timeout handling.
+
+    Args:
+        coro: The coroutine to run
+        timeout: Timeout in seconds
+        default: Default value to return on timeout
+
+    Returns:
+        Result of coroutine or default on timeout/error
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"Operation timed out after {timeout}s")
+        return default
+    except Exception as e:
+        logger.error(f"Operation failed: {e}")
+        return default
+
 
 class TravelPlannerNode:
-    def __init__(self, llm):
-        self.llm = llm
-        self.weather_tool_name = weather_tool.name
-        self.search_tool_name = get_tools()[0].name
+    """
+    Travel Planner Node with timeout handling and error recovery.
+
+    Features:
+    - Timeout handling for all LLM calls
+    - Circuit breaker integration for external APIs
+    - Graceful error recovery
+    - Retry logic for transient failures
+    """
+
+    _instance: Optional['TravelPlannerNode'] = None
+
+    def __new__(cls, llm=None):
+        """Singleton pattern with lazy initialization."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, llm=None):
+        """Initialize the travel planner node."""
+        if self._initialized and llm is None:
+            return
+
+        self._llm = llm
+        self._weather_tool_name = None
+        self._search_tool_name = None
+        self._initialized = True
+
+        logger.info("TravelPlannerNode initialized")
+
+    @property
+    def llm(self):
+        """Lazy LLM property."""
+        if self._llm is None:
+            from src.langgraph_core.LLMs.load_llms import get_model
+            self._llm = get_model()
+            logger.info("LLM lazily loaded in TravelPlannerNode")
+        return self._llm
+
+    @llm.setter
+    def llm(self, value):
+        """Set LLM."""
+        self._llm = value
+
+    @property
+    def weather_tool_name(self) -> str:
+        """Lazy property for weather tool name."""
+        if self._weather_tool_name is None:
+            self._weather_tool_name = weather_tool.name
+        return self._weather_tool_name
+
+    @property
+    def search_tool_name(self) -> str:
+        """Lazy property for search tool name."""
+        if self._search_tool_name is None:
+            tools = get_tools()
+            if tools:
+                self._search_tool_name = tools[0].name
+            else:
+                self._search_tool_name = "search"
+        return self._search_tool_name
+
+    async def _llm_invoke(self, prompt: str, timeout: float = DEFAULT_LLM_TIMEOUT) -> Optional[str]:
+        """
+        Invoke LLM with timeout handling.
+
+        Args:
+            prompt: The prompt to send to LLM
+            timeout: Timeout in seconds
+
+        Returns:
+            LLM response content or None on error
+        """
+        try:
+            response = await run_with_timeout(
+                self.llm.ainvoke([HumanMessage(content=prompt)]),
+                timeout=timeout
+            )
+            if response:
+                return response.content
+            return None
+        except Exception as e:
+            logger.error(f"LLM invoke failed: {e}")
+            return None
+
+    async def _safe_llm_invoke(self, prompt: str, fallback: str = "", timeout: float = DEFAULT_LLM_TIMEOUT) -> str:
+        """
+        Invoke LLM with fallback on error.
+
+        Args:
+            prompt: The prompt to send to LLM
+            fallback: Fallback response on error
+            timeout: Timeout in seconds
+
+        Returns:
+            LLM response or fallback
+        """
+        result = await self._llm_invoke(prompt, timeout)
+        return result if result else fallback
 
     async def router(self, state: TravelPlannerState) -> dict:
         logger.info("Router node is called")
@@ -446,8 +603,16 @@ class TravelPlannerNode:
                 flights_dict = json.loads(cached_flight)
             else:
                 logger.info(f" no cache found for {flight_key}")
-                flights_data = await search_flights(
-                    source_iata, destination_iata, start_date, end_date, state.get("flight_type", "cheapest"))
+
+                # Search with retry and circuit breaker
+                retry_config = RetryConfig(max_attempts=3, base_delay=1.0, max_delay=10.0)
+
+                flights_data = await with_retry(
+                    search_flights,
+                    retry_config,
+                    source_iata, destination_iata, start_date, end_date,
+                    state.get("flight_type", "cheapest")
+                )
 
                 flights_list = flights_data.get("flights", [])
 
@@ -500,6 +665,13 @@ class TravelPlannerNode:
                 state["messages"].append(AIMessage(content=no_flights_msg))
                 state["route"] = "hotel_search_node"
                 logger.info("No flights found, proceeding to hotel search")
+
+        except CircuitBreakerOpenError:
+            logger.warning("Flight search circuit breaker is open")
+            state["messages"].append(AIMessage(
+                content="Flight search is temporarily unavailable. Let me try searching for hotels instead."
+            ))
+            state["route"] = "hotel_search_node"
 
         except Exception as e:
             logger.error(f"Error searching flights: {e}")
@@ -582,8 +754,16 @@ class TravelPlannerNode:
                 hotels_dict = json.loads(cached_hotel)
             else:
                 logger.info(f" no cache found for {hotel_key}")
-                hotel_results = await search_hotels(
-                    city=destination, check_in=start_date, check_out=end_date, guests=state["accommodation_guests"])
+
+                # Search with retry and circuit breaker
+                retry_config = RetryConfig(max_attempts=3, base_delay=1.0, max_delay=10.0)
+
+                hotel_results = await with_retry(
+                    search_hotels,
+                    retry_config,
+                    city=destination, check_in=start_date, check_out=end_date,
+                    guests=state["accommodation_guests"]
+                )
                 hotel_options = hotel_results.get("hotels", [])
                 # print(len(hotel_options))
                 # Store hotels in dictionary format with sequence numbers as keys
@@ -636,6 +816,13 @@ class TravelPlannerNode:
                 state["messages"].append(AIMessage(content=no_hotels_msg))
                 state["route"] = "END"
                 logger.info("No hotels found, ending search")
+
+        except CircuitBreakerOpenError:
+            logger.warning("Hotel search circuit breaker is open")
+            state["messages"].append(AIMessage(
+                content="Hotel search is temporarily unavailable. Please try again later."
+            ))
+            state["route"] = "END"
 
         except Exception as e:
             logger.error(f"Error searching hotels: {e}")

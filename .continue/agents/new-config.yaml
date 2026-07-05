@@ -1,0 +1,84 @@
+name: Example Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: GLM-5.2 (NVIDIA)
+    provider: openai
+    model: z-ai/glm-5.2
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: ${{ secrets.NVIDIA_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      temperature: 1
+      topP: 1
+      maxTokens: 16384
+
+  - name: Kimi K2.6 (NVIDIA)
+    provider: openai
+    model: moonshotai/kimi-k2.6
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: ${{ secrets.NVIDIA_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      temperature: 1
+      topP: 1
+      maxTokens: 16384
+
+  - name: DeepSeek V4 Flash (NVIDIA)
+    provider: openai
+    model: deepseek-ai/deepseek-v4-flash
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: ${{ secrets.NVIDIA_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      temperature: 1
+      topP: 0.95
+      maxTokens: 16384
+
+  - name: MiniMax M3 (NVIDIA)
+    provider: openai
+    model: minimaxai/minimax-m3
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: ${{ secrets.NVIDIA_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      temperature: 1
+      topP: 0.95
+      maxTokens: 8192
+
+  - name: qwen2.5-coder 7b
+    provider: ollama
+    model: qwen2.5-coder:7b
+    roles:
+      - apply
+      - autocomplete
+      - chat
+      - edit
+
+  - name: Claude 4 Sonnet
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    apiKey: ${{ secrets.ANTHROPIC_API_KEY }}
+    roles:
+      - chat
+      - edit
+      - apply
+    defaultCompletionOptions:
+      contextLength: 200000
+      maxTokens: 64000
+    capabilities:
+      - tool_use
+      - image_input

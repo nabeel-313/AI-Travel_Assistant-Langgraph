@@ -4,15 +4,37 @@ from src.exceptions import ExceptionError
 from src.loggers import Logger
 from tasks.task_manager import task_manager
 import asyncio
+import threading
 
-# Initialize LLM + Graph (minimal initialization)
-from src.langgraph_core.LLMs.load_llms import LoadLLMs
-from src.langgraph_core.graphs.travel_planner_graph import TravelGraphBuilder
+# Lazy LLM and Graph initialization
+_llm = None
+_graph = None
+_init_lock = threading.Lock()
 
-models = LoadLLMs()
-llm = models.load_groq_model()  # Keep for fallback
-graph_builder = TravelGraphBuilder(llm)
-graph = graph_builder.build()
+
+def _get_llm():
+    """Lazy load LLM with thread safety"""
+    global _llm
+    if _llm is None:
+        with _init_lock:
+            if _llm is None:
+                from src.langgraph_core.LLMs.load_llms import LoadLLMs
+                models = LoadLLMs()
+                _llm = models.load_groq_model()
+    return _llm
+
+
+def _get_graph():
+    """Lazy load graph with thread safety"""
+    global _graph
+    if _graph is None:
+        with _init_lock:
+            if _graph is None:
+                from src.langgraph_core.graphs.travel_planner_graph import TravelGraphBuilder
+                graph_builder = TravelGraphBuilder(_get_llm())
+                _graph = graph_builder.build()
+    return _graph
+
 
 logger = Logger(__name__).get_logger()
 
@@ -41,7 +63,7 @@ async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: 
         async def run_langgraph():
             new_ai_messages = []
 
-            async for event in graph.astream(conversation_state):
+            async for event in _get_graph().astream(conversation_state):
                 for value in event.values():
                     conversation_state.update(value)
 

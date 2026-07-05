@@ -42,8 +42,6 @@ class TravelPlannerState(TypedDict):
     flights_processed: Optional[bool]  # Whether flights have been processed
 
     # --- Hotel/Accommodation details ---
-    accommodation_guests: Optional[int]
-    accommodation_area_type: Optional[str]
     accommodation_budget: Optional[str]
     accommodation_type: Optional[str]
     available_hotels: Optional[Dict]  # Hotels stored as dict {1: hotel1, 2: hotel2, ...}
