@@ -2,6 +2,7 @@
 Travel Planner Graph with checkpointing and async support.
 """
 import logging
+import os
 from typing import Optional, Dict, Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -252,13 +253,20 @@ class TravelGraphBuilder:
             logger.info("Compiled graph without checkpointing")
 
         # Generate diagram in development only
-        try:
-            self._compiled_graph.get_graph().draw_mermaid_png(
-                output_file_path=r"./logs/travel_routing_3.png"
-            )
-            logger.info("Generated graph diagram")
-        except Exception as e:
-            logger.warning("Could not generate graph diagram: %s", e)
+        if os.getenv("GENERATE_GRAPH_DIAGRAM", "false").lower() == "true":
+            # logger.info("Compiled graph successfully")
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if not loop.is_running():  # Only generate when not inside async context
+                    self._compiled_graph.get_graph().draw_mermaid_png(
+                        output_file_path=r"./logs/travel_routing_3.png"
+                    )
+                    logger.info("Generated graph diagram")
+                else:
+                    logger.info("Skipping graph diagram generation in async context")
+            except Exception as e:
+                logger.warning("Could not generate graph diagram: %s", e)
 
         return self._compiled_graph
 

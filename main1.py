@@ -298,11 +298,15 @@ async def get_data(request: Request):
     session_token = get_session_token(request)
 
     # Pass user context to chatbot
-    out = await langgraph_chatbot(
-        user_message=user_input,
-        user_id=str(user['id']),
-        session_id=session_token
-    )
+    try:
+        out = await langgraph_chatbot(
+            user_message=user_input,
+            user_id=str(user['id']),
+            session_id=session_token
+        )
+    except Exception as e:
+        logger.error(f"Chatbot error for user {user['email']}: {e}", exc_info=True)
+        out = "I'm sorry, something went wrong. Please try again."
 
     logger.info(f"AI message for user {user['email']}: {out}")
 

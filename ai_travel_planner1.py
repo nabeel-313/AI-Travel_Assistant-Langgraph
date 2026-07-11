@@ -4,21 +4,40 @@ from src.exceptions import ExceptionError
 from src.loggers import Logger
 import asyncio
 import time
-from threading import Lock
+from typing import Optional
 
 CONVERSATION_STATE_TTL = 86400  # 24 hours, aligned with session cookie
 
-# Lazy LLM and Graph initialization
+# Lazy LLM and Graph initialization (pre-loaded at module import to avoid async lock issues)
 _llm = None
 _graph = None
-_init_lock = Lock()
+# FIXED — lazy-create the lock inside the event loop:
+_init_lock: Optional[asyncio.Lock] = None
+
+def _get_init_lock() -> asyncio.Lock:
+    global _init_lock
+    if _init_lock is None:
+        _init_lock = asyncio.Lock()
+    return _init_lock
 
 
-def _get_llm():
-    """Lazy load LLM with thread safety"""
+def _get_llm_sync():
+    """Synchronously load LLM (called during module init or first sync use)"""
     global _llm
     if _llm is None:
-        with _init_lock:
+        from src.langgraph_core.LLMs.load_llms import LoadLLMs
+        models = LoadLLMs()
+        _llm = models.load_groq_model()
+    return _llm
+
+
+async def _get_llm():
+    """Async-safe lazy load LLM.
+    NOTE: Do NOT call this while holding _get_init_lock() — use inline loading instead.
+    """
+    global _llm
+    if _llm is None:
+        async with _get_init_lock():
             if _llm is None:
                 from src.langgraph_core.LLMs.load_llms import LoadLLMs
                 models = LoadLLMs()
@@ -26,15 +45,19 @@ def _get_llm():
     return _llm
 
 
-def _get_graph():
-    """Lazy load graph with thread safety"""
-    global _graph
-    if _graph is None:
-        with _init_lock:
-            if _graph is None:
-                from src.langgraph_core.graphs.travel_planner_graph import TravelGraphBuilder
-                graph_builder = TravelGraphBuilder(_get_llm())
-                _graph = graph_builder.build()
+async def _get_graph():
+    """Async-safe lazy load graph"""
+    global _graph, _llm
+    async with _get_init_lock():
+        if _graph is None:
+            from src.langgraph_core.graphs.travel_planner_graph import TravelGraphBuilder
+            # Load LLM inline WITHOUT re-acquiring the lock
+            if _llm is None:
+                from src.langgraph_core.LLMs.load_llms import LoadLLMs
+                models = LoadLLMs()
+                _llm = models.load_groq_model()
+            graph_builder = TravelGraphBuilder(_llm)
+            _graph = graph_builder.build()
     return _graph
 
 
@@ -64,12 +87,20 @@ async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: 
         # Add user message to persisted state
         conversation_state["messages"].append(HumanMessage(content=user_message))
 
-        # Use lazy-loaded graph
-        graph = _get_graph()
+        # Use lazy-loaded graph (async-safe)
+        graph = await _get_graph()
 
-        async for event in graph.astream(conversation_state):
-            for value in event.values():
-                conversation_state.update(value)
+        # Add overall timeout for graph execution (60 seconds)
+        try:
+            async for event in asyncio.wait_for(
+                graph.astream(conversation_state),
+                timeout=60.0
+            ):
+                for value in event.values():
+                    conversation_state.update(value)
+        except asyncio.TimeoutError:
+            logger.error("Graph execution timed out after 60 seconds")
+            return "I'm sorry, the request took too long to process. Please try again with a simpler query."
 
         new_ai_messages = []
         for msg in conversation_state.get("messages", [])[initial_message_count:]:
@@ -89,8 +120,19 @@ async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: 
         # Return only NEW messages from this execution
         return "\n".join(new_ai_messages) if new_ai_messages else "No response."
 
+    except asyncio.TimeoutError:
+        logger.error("LangGraph chatbot overall timeout for user(%s)", user_id)
+        return "I'm sorry, the request took too long to process. Please try again with a simpler query."
     except Exception as e:
-        logger.error("LangGraph chatbot error: %s", e, exc_info=True)
+        logger.error("LangGraph chatbot error for user(%s): %s", user_id, e, exc_info=True)
+        # Try to save state even on error so conversation isn't lost
+        try:
+            if 'conversation_state' in dir() and conversation_state:
+                serializable_state = convert_state_to_serializable(conversation_state)
+                serializable_state["updated_at"] = int(time.time())
+                await save_user_conversation_state(user_id, session_id, serializable_state)
+        except Exception as save_err:
+            logger.error("Failed to save state after error: %s", save_err)
         raise ExceptionError(e)
 
 def convert_state_to_serializable(state: dict) -> dict:

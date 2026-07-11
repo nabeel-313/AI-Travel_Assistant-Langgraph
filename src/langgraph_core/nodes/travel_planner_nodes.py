@@ -242,22 +242,38 @@ class TravelPlannerNode:
         # Tool call injection
         if route == "weather":
             city_prompt = f"Extract city from: '{user_input}' give only city name"
-            city_response = await self.llm.ainvoke([HumanMessage(content=city_prompt)])
-            city = city_response.content.strip()
-            ai_msg = AIMessage(
-                content="Let me check the weather for you...",
-                tool_calls=[{"id": str(uuid4()), "name": self.weather_tool_name, "args": {"city_name": city}}],
+            city_response = await run_with_timeout(
+                self.llm.ainvoke([HumanMessage(content=city_prompt)]),
+                timeout=DEFAULT_LLM_TIMEOUT,
+                default=None
             )
-            messages = messages + [ai_msg]
+            if city_response is None:
+                logger.error("Router weather city extraction timed out, falling back to chat")
+                route = "chat"
+            else:
+                city = city_response.content.strip()
+                ai_msg = AIMessage(
+                    content="Let me check the weather for you...",
+                    tool_calls=[{"id": str(uuid4()), "name": self.weather_tool_name, "args": {"city_name": city}}],
+                )
+                messages = messages + [ai_msg]
         elif route == "search":
             query_prompt = f"Extract search query from: '{user_input}'"
-            query_response = await self.llm.ainvoke([HumanMessage(content=query_prompt)])
-            query = query_response.content.strip() or user_input
-            ai_msg = AIMessage(
-                content=f"Searching for {query}...",
-                tool_calls=[{"id": str(uuid4()), "name": self.search_tool_name, "args": {"query": query}}],
+            query_response = await run_with_timeout(
+                self.llm.ainvoke([HumanMessage(content=query_prompt)]),
+                timeout=DEFAULT_LLM_TIMEOUT,
+                default=None
             )
-            messages = messages + [ai_msg]
+            if query_response is None:
+                logger.error("Router search query extraction timed out, falling back to chat")
+                route = "chat"
+            else:
+                query = query_response.content.strip() or user_input
+                ai_msg = AIMessage(
+                    content=f"Searching for {query}...",
+                    tool_calls=[{"id": str(uuid4()), "name": self.search_tool_name, "args": {"query": query}}],
+                )
+                messages = messages + [ai_msg]
 
         logger.info(f"Router classified intent as: {route}")
         return {"route": route, "messages": messages, "last_user_message": user_input}
@@ -271,8 +287,22 @@ class TravelPlannerNode:
         if not isinstance(last_msg, HumanMessage):
             return {"messages": state["messages"]}
 
-        response = await self.llm.ainvoke([last_msg])
-        return {"messages": state["messages"] + [response]}
+        try:
+            response = await run_with_timeout(
+                self.llm.ainvoke([last_msg]),
+                timeout=DEFAULT_LLM_TIMEOUT,
+                default=None
+            )
+            if response is None:
+                logger.error("Chat node LLM call timed out or failed")
+                fallback = AIMessage(content="I'm having trouble responding right now. Please try again in a moment.")
+                return {"messages": state["messages"] + [fallback]}
+            logger.info("Chat node response received successfully")
+            return {"messages": state["messages"] + [response]}
+        except Exception as e:
+            logger.error(f"Chat node failed with exception: {e}", exc_info=True)
+            fallback = AIMessage(content="Sorry, I encountered an error. Please try again.")
+            return {"messages": state["messages"] + [fallback]}
 
     async def travel_node(self, state: TravelPlannerState):
         logger.info("Travel node is called")
