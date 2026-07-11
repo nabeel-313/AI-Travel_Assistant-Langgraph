@@ -25,7 +25,7 @@ class AsyncRedisClient:
         max_retries: int = 3,
         retry_delay: float = 1.0
     ):
-        self.redis_url = settings.REDIS_URL
+        self.redis_url = settings.redis.redis_url
         self.max_connections = max_connections
         self.socket_timeout = socket_timeout
         self.socket_connect_timeout = socket_connect_timeout

@@ -100,7 +100,13 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+        "script-src 'self' 'unsafe-inline'; "
+        "img-src 'self' https://cdn-icons-png.flaticon.com data:; "
+        "font-src 'self' https://cdnjs.cloudflare.com;"
+        )
     return response
 
 
@@ -194,6 +200,7 @@ async def register(user_data: UserRegister):
 
         if result["success"]:
             user_data_dict = {
+                "id": result["user_id"],
                 "email": user_data.email,
                 "name": user_data.name
             }

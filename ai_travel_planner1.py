@@ -2,14 +2,16 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from src.cache.redis_cluster import redis_cluster
 from src.exceptions import ExceptionError
 from src.loggers import Logger
-from tasks.task_manager import task_manager
 import asyncio
-import threading
+import time
+from threading import Lock
+
+CONVERSATION_STATE_TTL = 86400  # 24 hours, aligned with session cookie
 
 # Lazy LLM and Graph initialization
 _llm = None
 _graph = None
-_init_lock = threading.Lock()
+_init_lock = Lock()
 
 
 def _get_llm():
@@ -41,7 +43,10 @@ logger = Logger(__name__).get_logger()
 async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: str = None):
     """Handle user message with user-specific state and queued processing"""
     try:
-        logger.info(f"User message from user {user_id}: {user_message}")
+        if not user_message or not str(user_message).strip():
+            return "Please enter a message."
+
+        logger.info("User(%s): %s", user_id, user_message)
 
         # ASYNC STATE RETRIEVAL
         conversation_state = await get_user_conversation_state(user_id, session_id)
@@ -59,33 +64,24 @@ async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: 
         # Add user message to persisted state
         conversation_state["messages"].append(HumanMessage(content=user_message))
 
-        # Process through LangGraph
-        async def run_langgraph():
-            new_ai_messages = []
+        # Use lazy-loaded graph
+        graph = _get_graph()
 
-            async for event in _get_graph().astream(conversation_state):
-                for value in event.values():
-                    conversation_state.update(value)
+        async for event in graph.astream(conversation_state):
+            for value in event.values():
+                conversation_state.update(value)
 
-                    # Get ALL messages from current state
-                    all_messages = conversation_state.get("messages", [])
+        new_ai_messages = []
+        for msg in conversation_state.get("messages", [])[initial_message_count:]:
+            if isinstance(msg, AIMessage) and msg.content:
+                logger.info("Assistant: %s", msg.content)
+                new_ai_messages.append(str(msg.content))
+            elif isinstance(msg, ToolMessage) and msg.content:
+                logger.info("[Tool Result] %s", msg.content)
+                new_ai_messages.append(str(msg.content))
 
-                    # Extract only NEW messages added during this execution
-                    if initial_message_count < len(all_messages):
-                        new_messages = all_messages[initial_message_count:]
-
-                        for msg in new_messages:
-                            if isinstance(msg, AIMessage) and msg.content:
-                                logger.info(f"Assistant: {msg.content}")
-                                new_ai_messages.append(msg.content)
-                            elif isinstance(msg, ToolMessage) and msg.content:
-                                logger.info(f"[Tool Result] {msg.content}")
-                                new_ai_messages.append(msg.content)
-            return new_ai_messages, conversation_state
-
-        new_ai_messages, updated_state = await run_langgraph()
-
-        serializable_state = convert_state_to_serializable(updated_state)
+        serializable_state = convert_state_to_serializable(conversation_state)
+        serializable_state["updated_at"] = int(time.time())
 
         # ASYNC STATE SAVING
         await save_user_conversation_state(user_id, session_id, serializable_state)
@@ -94,6 +90,7 @@ async def langgraph_chatbot(user_message: str, user_id: str = None, session_id: 
         return "\n".join(new_ai_messages) if new_ai_messages else "No response."
 
     except Exception as e:
+        logger.error("LangGraph chatbot error: %s", e, exc_info=True)
         raise ExceptionError(e)
 
 def convert_state_to_serializable(state: dict) -> dict:
@@ -138,8 +135,8 @@ def convert_state_from_serializable(serializable_state: dict) -> dict:
 
 async def get_user_conversation_state(user_id: str, session_id: str):
     """Async get user-specific conversation state from Redis"""
-    if not user_id:
-        return None
+    if not user_id or not session_id:
+        return {}
 
     key = f"conversation_state:{user_id}:{session_id}"
     serialized_state = await redis_cluster.get_json(key)
@@ -147,15 +144,15 @@ async def get_user_conversation_state(user_id: str, session_id: str):
     if serialized_state:
         return convert_state_from_serializable(serialized_state)
 
-    return None
+    return {}
 
 async def save_user_conversation_state(user_id: str, session_id: str, state: dict):
     """Async save user-specific conversation state to Redis"""
-    if not user_id:
+    if not user_id or not session_id:
         return
 
     key = f"conversation_state:{user_id}:{session_id}"
-    await redis_cluster.set_json(key, state, expire=3600)
+    await redis_cluster.set_json(key, state, expire=CONVERSATION_STATE_TTL)
 
 if __name__ == "__main__":
     print("🤖 Travel Planner Chatbot (type 'quit' to exit)\n")
@@ -165,7 +162,12 @@ if __name__ == "__main__":
             if user_input.lower() in ["quit", "exit", "q"]:
                 print("Goodbye!")
                 break
-            asyncio.run(langgraph_chatbot(user_input))
+
+            response = asyncio.run(langgraph_chatbot(user_input))
+            print(f"Assistant: {response}\n")
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
+        except Exception as e:
+            logger.error("Error in chat loop: %s", e, exc_info=True)
+            print(f"Error: {e}")

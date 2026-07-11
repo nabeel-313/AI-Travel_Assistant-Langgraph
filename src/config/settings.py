@@ -7,11 +7,19 @@ from functools import lru_cache
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class SecuritySettings(BaseModel):
+class SecuritySettings(BaseSettings):
     """Security-related settings."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
     secret_key: str = Field(default="", alias="SECRET_KEY")
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
@@ -32,32 +40,50 @@ class SecuritySettings(BaseModel):
         return v
 
 
-class DatabaseSettings(BaseModel):
+class DatabaseSettings(BaseSettings):
     """Database connection settings."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
     database_url: str = Field(default="", alias="DATABASE_URL")
     async_database_url: str = Field(default="", alias="ASYNC_DATABASE_URL")
-    db_pool_size: int = 20
-    db_max_overflow: int = 30
-    db_pool_timeout: int = 30
-    db_pool_recycle: int = 3600
+    db_pool_size: int = Field(default=20, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=30, alias="DB_MAX_OVERFLOW")
+    db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
+    db_pool_recycle: int = Field(default=3600, alias="DB_POOL_RECYCLE")
+    db_use_null_pool: bool = Field(default=False, alias="DB_USE_NULL_POOL")
+    db_echo: bool = Field(default=False, alias="DB_ECHO")
 
     @field_validator("database_url", mode="before")
     @classmethod
     def validate_database_url(cls, v):
         if not v:
-            return "postgresql://nabeel:momin.123@localhost:5432/travel_db"
+            return "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
         return v
 
 
-class RedisSettings(BaseModel):
+class RedisSettings(BaseSettings):
     """Redis connection settings."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
     redis_url: str = Field(default="", alias="REDIS_URL")
-    redis_max_connections: int = 50
-    redis_socket_timeout: int = 5
-    redis_socket_connect_timeout: int = 5
-    redis_retry_on_timeout: bool = True
-    redis_health_check_interval: int = 30
-    session_ttl_seconds: int = 86400  # 24 hours
+    redis_max_connections: int = Field(default=50, alias="REDIS_MAX_CONNECTIONS")
+    redis_socket_timeout: int = Field(default=5, alias="REDIS_SOCKET_TIMEOUT")
+    redis_socket_connect_timeout: int = Field(default=5, alias="REDIS_SOCKET_CONNECT_TIMEOUT")
+    redis_retry_on_timeout: bool = Field(default=True, alias="REDIS_RETRY_ON_TIMEOUT")
+    redis_health_check_interval: int = Field(default=30, alias="REDIS_HEALTH_CHECK_INTERVAL")
+    session_ttl_seconds: int = Field(default=86400, alias="SESSION_TTL_SECONDS")  # 24 hours
 
     @field_validator("redis_url", mode="before")
     @classmethod
@@ -67,8 +93,16 @@ class RedisSettings(BaseModel):
         return v
 
 
-class LLMSettings(BaseModel):
+class LLMSettings(BaseSettings):
     """LLM provider settings."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
     groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
     google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
@@ -135,10 +169,12 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", alias="ENVIRONMENT")
 
     # Sub-settings
-    security: SecuritySettings = SecuritySettings()
-    database: DatabaseSettings = DatabaseSettings()
-    redis: RedisSettings = RedisSettings()
-    llm: LLMSettings = LLMSettings()
+    # NOTE: these are BaseSettings subclasses (not plain BaseModel), so each
+    # one independently reads .env / the environment when instantiated here.
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
     rate_limit: RateLimitSettings = RateLimitSettings()
     timeout: TimeoutSettings = TimeoutSettings()
     retry: RetrySettings = RetrySettings()
@@ -150,6 +186,13 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = True
     cors_allow_methods: List[str] = ["*"]
     cors_allow_headers: List[str] = ["*"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def split_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     # API
     api_v1_prefix: str = "/api/v1"

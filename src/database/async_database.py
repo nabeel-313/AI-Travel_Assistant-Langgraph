@@ -2,7 +2,7 @@ from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
-
+from contextlib import asynccontextmanager
 from src.config.settings import settings
 from src.loggers import Logger
 
@@ -17,22 +17,22 @@ class AsyncDatabase:
         Initialize async database with connection pooling.
         """
         # Use async URL from settings or convert sync URL
-        database_url = settings.ASYNC_DATABASE_URL or settings.DATABASE_URL.replace(
+        database_url = settings.database.async_database_url or settings.database.database_url.replace(
             "postgresql://", "postgresql+asyncpg://"
         )
 
         # Determine pool class based on settings
-        pool_class = NullPool if settings.DATABASE_USE_NULL_POOL else None
-
+        pool_class = NullPool if settings.database.db_use_null_pool else None
+        print(f"DEBUG resolved database_url = {database_url!r}")
         self.engine = create_async_engine(
             database_url,
-            pool_size=settings.DATABASE_POOL_SIZE,
-            max_overflow=settings.DATABASE_MAX_OVERFLOW,
+            pool_size=settings.database.db_pool_size,
+            max_overflow=settings.database.db_max_overflow,
             pool_pre_ping=True,
-            pool_recycle=settings.DATABASE_POOL_RECYCLE,
-            pool_timeout=settings.DATABASE_POOL_TIMEOUT,
+            pool_recycle=settings.database.db_pool_recycle,
+            pool_timeout=settings.database.db_pool_timeout,
             poolclass=pool_class,
-            echo=settings.DATABASE_ECHO
+            echo=settings.database.db_echo
         )
 
         self.async_session = async_sessionmaker(
@@ -42,10 +42,10 @@ class AsyncDatabase:
         )
 
         logger.info(
-            f"Async database engine created - Pool size: {settings.DATABASE_POOL_SIZE}, "
-            f"Max overflow: {settings.DATABASE_MAX_OVERFLOW}"
+            f"Async database engine created - Pool size: {settings.database.db_pool_size}, "
+            f"Max overflow: {settings.database.db_max_overflow}"
         )
-
+    @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """
         Get a new async database session.

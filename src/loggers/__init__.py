@@ -188,8 +188,10 @@ def get_logger(name: str = __name__) -> logging.Logger:
     """Get or create a logger instance."""
     if name not in Logger._loggers:
         Logger(name)
-    return Logger._loggers[name].get_logger()
+    return Logger._loggers[name]
 
 
 # Module-level logger for imports
-logging = get_logger(__name__)
+#logging = get_logger(__name__)
+# Module-level logger for imports
+module_logger = get_logger(__name__)

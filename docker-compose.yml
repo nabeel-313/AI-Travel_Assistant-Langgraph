@@ -3,11 +3,11 @@ version: '3.8'
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:latest
+    image: postgres:15-alpine
     container_name: postgres_travel
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres123}
       - POSTGRES_DB=${POSTGRES_DB:-travel_db}
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
@@ -33,7 +33,7 @@ services:
   # Redis
   redis:
     image: redis:latest
-    container_name: my-redis
+    container_name: travel_redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:

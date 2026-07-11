@@ -105,6 +105,11 @@ class CircuitBreaker:
         self._last_failure_time = None
 
 
+class CircuitBreakerOpenError(Exception):
+    """Raised when a circuit breaker is open and a call is rejected."""
+    pass
+
+
 @dataclass
 class RetryConfig:
     """Configuration for retry logic."""
